@@ -5,7 +5,16 @@
 
 // include for memory managment
 #include <linux/slab.h>
-#include <string.h>
+
+
+#include <linux/kernel.h>
+#include <linux/module.h>
+
+// Module info
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Karasev Vladimir");
+MODULE_DESCRIPTION("Test task");
+
 
 // Creating circular buffer. Allocating memory
 int create_circular_buffer(struct circular_buffer* buffer, int size)
@@ -31,7 +40,7 @@ int create_circular_buffer(struct circular_buffer* buffer, int size)
 // Destroy buffer. Free allocated memory
 void destroy_circular_buffer(struct circular_buffer* buffer)
 {
-    kfree(buffer->data);
+    kfree(buffer->data_);
 }
 
 
@@ -77,7 +86,9 @@ int write_to_circular_buffer(struct circular_buffer* buffer, const char* src, in
             buffer->write_index_ = 0;
         }
         
-        size_to_copy = min(size_to_write, buffer->size);
+        size_to_copy = min(size_to_write, buffer->size_);
+
+        
 
         not_copied = copy_from_user(buffer->data_, src, size_to_copy);
 
@@ -92,5 +103,6 @@ int write_to_circular_buffer(struct circular_buffer* buffer, const char* src, in
 // Removing an element
 int read_from_circular_buffer(struct circular_buffer* buffer, char* dest, int size_to_read)
 {
+    return -1;
 
 }

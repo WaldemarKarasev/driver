@@ -1,4 +1,5 @@
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/cdev.h>
@@ -19,30 +20,30 @@
 
 // include for O_NONBLOCK
 #include <linux/fcntl.h>
-// circular_buffer includes
-#include "circular_buffer.h"
+
+
+// device data struct includes
+#include "device.h"
+
+
 
 // ioctl custom flags include  
 #include "ioctl_custom_flags.h"
 
-
-// Module information
+// Module info
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Karasev Vladimir");
 MODULE_DESCRIPTION("Test task");
 
-// 1. Create a structure for our fake device
-static int buffer_size = 100; // default size of the buffer will be 100 bytes
-// Setting buffer size from command line
-module_param(buffer_size, int, 0000);
 
-struct fake_device {
-    circular_buffer buffer_;
-    struct semaphore sem_;
-    struct mutex lock_;
-    int last_writer_pid_;
-    int last_reader_pid_;
-} virtual_device;
+
+
+// 1. Create a structure for our fake device
+static uint buffer_size = 100;           // default size of the buffer will be 100 bytes
+module_param(buffer_size, uint, S_IRUGO);   // Setting buffer size from command line
+MODULE_PARM_DESC(buffer_size, "Size of the device circular buffer");
+
+struct fake_device virtual_device;
 
 // 2. To later register fake device we need a cdev obj and some other variables
 struct cdev* my_char_dev;   // ptr for our fake device
@@ -76,70 +77,17 @@ int device_open(struct inode* inode, struct file* filp)
 // 8. called when user wants to get the information from device
 ssize_t device_read(struct file* filp, char* buf_store_data, size_t buf_count, loff_t* cur_offset)
 {
-    // take data from kernel space(device) to user space(process)
-    // copy_to_user(dest, source, sizetotransfer)
     printk(KERN_INFO "Reading from device");
 
-
-    if(filp->f_flags & O_NONBLOCK)
-    {
-        if (!mutex_try_lock(&virtual_device.lock_))
-        {
-            return -EAGAIN;
-        }
-        virtual_device.last_reader_pid_ = current_uid();
-        ret = read_from_circular_buffer(&virtual_device.buffer, buf_store_data, buf_count);
-    }
-    else
-    {
-        mutex_lock(&virtual_device.lock_);
-        // Critical section start
-
-        virtual_device.last_reader_pid_ = current_uid();
-        ret = read_from_circular_buffer(&virtual_device.buffer, buf_store_data, buf_count);
-
-        // end
-    }
-
-    // If we are here, we must unlock mutex 
-    mutex_unlock(&virtual_device.lock_);
-    return ret;
+    return fake_device_read(&virtual_device, filp, buf_store_data, buf_count);
 }
 
 // 9. called when user wants to send information to the device
 ssize_t device_write(struct file* filp, const char* buf_store_data, size_t buf_count, loff_t* curr_offset)
 {
-    // send data to the kernel
-    // copy_from_user(dest, source, count)
-
     printk(KERN_INFO "writing to device");
 
-    if(filp->f_flags & O_NONBLOCK)
-    {
-        if (!mutex_try_lock(&virtual_device.lock_))
-        {
-            // return if device is locked
-            return -EAGAIN;
-        }
-        
-        virtual_device.last_writer_pid_ = current_uid();
-        ret = write_to_circular_buffer(&virtual_device.buffer, buf_store_data, buf_count);
-    }
-    else
-    {
-        mutex_lock(&virtual_device.lock_);
-        // Critical section start
-
-        virtual_device.last_reader_pid_ = current_uid();
-        ret = write_to_circular_buffer(&virtual_device.buffer, buf_store_data, buf_count);
-
-        // end
-    }
-
-    // If we are here, we must unlock mutex 
-    mutex_unlock(&virtual_device.lock_);
-    
-    return ret;
+    return fake_device_write(&virtual_device, filp, buf_store_data, buf_count);
 }
 
 // 10. called upon user close
@@ -147,18 +95,47 @@ int device_close(struct inode* inode, struct file* filp)
 {
     // by calling up, which is opposite of down for semaphore, we release the mutex that we obtained at device open
     // this has the effect of allowing other process to use the device now
-    up(&virtual_device.sem);
+    up(&virtual_device.sem_);
     printk(KERN_INFO "closed device");
     return 0;
 }
 
+static long int my_ioctl(struct file *file, unsigned cmd, unsigned long arg){
+	struct mystruct test;
+	switch(cmd)
+    {
+		case WR_VALUE:
+            printk("ioctl_ - write data.\n");
+
+            break;
+
+        case RD_VALUE:
+            printk("ioctl_ - read data.\n");
+
+            break;
+
+		case LAST_READER:
+			copy_to_user(&virtual_device.last_writer_, (struct process_info*) arg, sizeof(struct process_info));
+            printk("ioctl_ - Getter for last reader.\n");
+			break;
+
+		case LAST_WRITER:
+			copy_to_user(&virtual_device.last_writer_, (struct process_info*) arg, sizeof(struct process_info));
+            printk("ioctl_ - Getter for last writer.\n");
+			break;
+	}
+	return 0;
+}
+
+
 // 6. Tell the kernel which functions to call when user operates on out device file 
 struct file_operations fops = {
     .owner = THIS_MODULE,       // prevent unloading of this module when operations are in use
-    .open  = device_open,         // points to the method to call when opening the device
-    .release = device_close,     // points to the method to call when closing the device 
-    .write = device_write,       // points to the method to call when writing to the device 
-    .read  = device_read         // points to the method to call when reading from device
+    .open  = device_open,       // points to the method to call when opening the device
+    .release = device_close,    // points to the method to call when closing the device 
+    .unlocked_ioctl = my_ioctl  // points to the method to call when using ioctl call on the device
+    .write = device_write,      // points to the method to call when writing to the device 
+    .read  = device_read        // points to the method to call when reading from device
 };
 
 static int driver_entry(void)
@@ -218,21 +195,6 @@ static void driver_exit(void)
     printk(KERN_ALERT "unloaded module");
 }
 
-
-int init_mod(void) {
-    pr_info("Hello world\n");
-    return 0;
-}
-
-void cleanup_mod(void) {
-    pr_info("Goodbye world\n");
-}
-
-
 // Inform the kernel where to start and stop out module/driver
 module_init(driver_entry);
 module_exit(driver_exit);
-
-
-// Module info
-MODULE_LICENSE("GPL");
