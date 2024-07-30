@@ -31,6 +31,9 @@
 
 // For saving last reader and writer
 #include <linux/cred.h>
+// For time stamp
+#include <linux/time.h>
+// #include <linux/timekeeping>
 
 // circular_buffer includes
 #include "circular_buffer.h"
@@ -38,6 +41,7 @@
 struct process_info
 {
     kuid_t pid_;                           // process pid
+    struct timespec64 time_;
 };
 
 struct fake_device 
